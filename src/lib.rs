@@ -72,6 +72,7 @@ where
 
 /// A trait for hash digests.
 pub trait Digest: Display {
+    /// Returns a byte slice of the digest's contents.
     #[must_use]
     fn as_bytes(&self) -> &[u8]
     where
@@ -80,6 +81,7 @@ pub trait Digest: Display {
         self.as_ref()
     }
 
+    /// Returns a string in the lowercase hexadecimal representation.
     #[must_use]
     fn to_hex_lowercase(&self) -> String
     where
@@ -88,6 +90,7 @@ pub trait Digest: Display {
         format!("{self:x}")
     }
 
+    /// Returns a string in the uppercase hexadecimal representation.
     #[must_use]
     fn to_hex_uppercase(&self) -> String
     where
@@ -128,6 +131,7 @@ pub trait Hash: Default {
 
 /// A trait for simple bytes-like objects.
 pub trait Hashable: AsRef<[u8]> {
+    /// Computes the hash digest.
     fn hash<H>(&self) -> H::Digest
     where
         H: Hash,
@@ -137,6 +141,7 @@ pub trait Hashable: AsRef<[u8]> {
         hash.digest()
     }
 
+    /// Updates the given hash instance with the bytes from this object.
     fn hash_with<H>(&self, hash: &mut H)
     where
         H: Hash,
@@ -161,6 +166,7 @@ impl<T> Hashable for &mut T where T: Hashable {}
 
 /// A trait for complex objects which must be processed chunk by chunk.
 pub trait Chksumable {
+    /// Calculates the checksum of the object.
     fn chksum<H>(&mut self) -> Result<H::Digest>
     where
         H: Hash,
@@ -170,6 +176,7 @@ pub trait Chksumable {
         Ok(hash.digest())
     }
 
+    /// Updates the given hash instance with the data from the object.
     fn chksum_with<H>(&mut self, hash: &mut H) -> Result<()>
     where
         H: Hash;
