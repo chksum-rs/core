@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Added missing method comments to improve documentation clarity.
 
+### Changed
+
+- Refactored code to use macros for trait implementations, improving maintainability and reducing duplication.
+
 ## [0.0.0] - 2023-12-21
 
 ### Added

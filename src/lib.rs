@@ -150,15 +150,27 @@ pub trait Hashable: AsRef<[u8]> {
     }
 }
 
-impl Hashable for &[u8] {}
+macro_rules! impl_hashable {
+    ([$t:ty; LENGTH], $($rest:tt)+) => {
+        impl_hashable!([$t; LENGTH]);
+        impl_hashable!($($rest)*);
+    };
 
-impl<const LENGTH: usize> Hashable for [u8; LENGTH] {}
+    ($t:ty, $($rest:tt)+) => {
+        impl_hashable!($t);
+        impl_hashable!($($rest)*);
+    };
 
-impl Hashable for Vec<u8> {}
+    ([$t:ty; LENGTH]) => {
+        impl<const LENGTH: usize> Hashable for [$t; LENGTH] {}
+    };
 
-impl Hashable for &str {}
+    ($t:ty) => {
+        impl Hashable for $t {}
+    };
+}
 
-impl Hashable for String {}
+impl_hashable!(&[u8], [u8; LENGTH], Vec<u8>, &str, String);
 
 impl<T> Hashable for &T where T: Hashable {}
 
@@ -195,7 +207,15 @@ where
     }
 }
 
-impl Chksumable for Path {
+macro_rules! impl_chksumable {
+    ($($t:ty),+ => $i:tt) => {
+        $(
+            impl Chksumable for $t $i
+        )*
+    };
+}
+
+impl_chksumable!(Path, &Path, &mut Path => {
     fn chksum_with<H>(&mut self, hash: &mut H) -> Result<()>
     where
         H: Hash,
@@ -208,66 +228,18 @@ impl Chksumable for Path {
             File::open(self)?.chksum_with(hash)
         }
     }
-}
+});
 
-impl Chksumable for &Path {
-    fn chksum_with<H>(&mut self, hash: &mut H) -> Result<()>
-    where
-        H: Hash,
-    {
-        let metadata = self.metadata()?;
-        if metadata.is_dir() {
-            read_dir(self)?.chksum_with(hash)
-        } else {
-            // everything treat as a file when it is not a directory
-            File::open(self)?.chksum_with(hash)
-        }
-    }
-}
-
-impl Chksumable for &mut Path {
-    fn chksum_with<H>(&mut self, hash: &mut H) -> Result<()>
-    where
-        H: Hash,
-    {
-        let metadata = self.metadata()?;
-        if metadata.is_dir() {
-            read_dir(self)?.chksum_with(hash)
-        } else {
-            // everything treat as a file when it is not a directory
-            File::open(self)?.chksum_with(hash)
-        }
-    }
-}
-
-impl Chksumable for PathBuf {
+impl_chksumable!(PathBuf, &PathBuf, &mut PathBuf => {
     fn chksum_with<H>(&mut self, hash: &mut H) -> Result<()>
     where
         H: Hash,
     {
         self.as_path().chksum_with(hash)
     }
-}
+});
 
-impl Chksumable for &PathBuf {
-    fn chksum_with<H>(&mut self, hash: &mut H) -> Result<()>
-    where
-        H: Hash,
-    {
-        self.as_path().chksum_with(hash)
-    }
-}
-
-impl Chksumable for &mut PathBuf {
-    fn chksum_with<H>(&mut self, hash: &mut H) -> Result<()>
-    where
-        H: Hash,
-    {
-        self.as_path().chksum_with(hash)
-    }
-}
-
-impl Chksumable for File {
+impl_chksumable!(File, &File, &mut File => {
     fn chksum_with<H>(&mut self, hash: &mut H) -> Result<()>
     where
         H: Hash,
@@ -288,82 +260,18 @@ impl Chksumable for File {
         }
         Ok(())
     }
-}
+});
 
-impl Chksumable for &File {
-    fn chksum_with<H>(&mut self, hash: &mut H) -> Result<()>
-    where
-        H: Hash,
-    {
-        if self.is_terminal() {
-            return Err(Error::IsTerminal);
-        }
-
-        let mut reader = BufReader::new(self);
-        loop {
-            let buffer = reader.fill_buf()?;
-            let length = buffer.len();
-            if length == 0 {
-                break;
-            }
-            buffer.hash_with(hash);
-            reader.consume(length);
-        }
-        Ok(())
-    }
-}
-
-impl Chksumable for &mut File {
-    fn chksum_with<H>(&mut self, hash: &mut H) -> Result<()>
-    where
-        H: Hash,
-    {
-        if self.is_terminal() {
-            return Err(Error::IsTerminal);
-        }
-
-        let mut reader = BufReader::new(self);
-        loop {
-            let buffer = reader.fill_buf()?;
-            let length = buffer.len();
-            if length == 0 {
-                break;
-            }
-            buffer.hash_with(hash);
-            reader.consume(length);
-        }
-        Ok(())
-    }
-}
-
-impl Chksumable for DirEntry {
+impl_chksumable!(DirEntry, &DirEntry, &mut DirEntry => {
     fn chksum_with<H>(&mut self, hash: &mut H) -> Result<()>
     where
         H: Hash,
     {
         self.path().chksum_with(hash)
     }
-}
+});
 
-impl Chksumable for &DirEntry {
-    fn chksum_with<H>(&mut self, hash: &mut H) -> Result<()>
-    where
-        H: Hash,
-    {
-        self.path().chksum_with(hash)
-    }
-}
-
-impl Chksumable for &mut DirEntry {
-    fn chksum_with<H>(&mut self, hash: &mut H) -> Result<()>
-    where
-        H: Hash,
-    {
-        self.path().chksum_with(hash)
-    }
-}
-
-impl Chksumable for ReadDir {
+impl_chksumable!(ReadDir, &mut ReadDir => {
     fn chksum_with<H>(&mut self, hash: &mut H) -> Result<()>
     where
         H: Hash,
@@ -376,51 +284,18 @@ impl Chksumable for ReadDir {
             .try_for_each(|mut dir_entry| dir_entry.chksum_with(hash))?;
         Ok(())
     }
-}
+});
 
-impl Chksumable for &mut ReadDir {
-    fn chksum_with<H>(&mut self, hash: &mut H) -> Result<()>
-    where
-        H: Hash,
-    {
-        let dir_entries: io::Result<Vec<DirEntry>> = self.collect();
-        let mut dir_entries = dir_entries?;
-        dir_entries.sort_by_key(DirEntry::path);
-        dir_entries
-            .into_iter()
-            .try_for_each(|mut dir_entry| dir_entry.chksum_with(hash))?;
-        Ok(())
-    }
-}
-
-impl Chksumable for Stdin {
+impl_chksumable!(Stdin, &Stdin, &mut Stdin => {
     fn chksum_with<H>(&mut self, hash: &mut H) -> Result<()>
     where
         H: Hash,
     {
         self.lock().chksum_with(hash)
     }
-}
+});
 
-impl Chksumable for &Stdin {
-    fn chksum_with<H>(&mut self, hash: &mut H) -> Result<()>
-    where
-        H: Hash,
-    {
-        self.lock().chksum_with(hash)
-    }
-}
-
-impl Chksumable for &mut Stdin {
-    fn chksum_with<H>(&mut self, hash: &mut H) -> Result<()>
-    where
-        H: Hash,
-    {
-        self.lock().chksum_with(hash)
-    }
-}
-
-impl Chksumable for StdinLock<'_> {
+impl_chksumable!(StdinLock<'_>, &mut StdinLock<'_> => {
     fn chksum_with<H>(&mut self, hash: &mut H) -> Result<()>
     where
         H: Hash,
@@ -440,26 +315,4 @@ impl Chksumable for StdinLock<'_> {
         }
         Ok(())
     }
-}
-
-impl Chksumable for &mut StdinLock<'_> {
-    fn chksum_with<H>(&mut self, hash: &mut H) -> Result<()>
-    where
-        H: Hash,
-    {
-        if self.is_terminal() {
-            return Err(Error::IsTerminal);
-        }
-
-        loop {
-            let buffer = self.fill_buf()?;
-            let length = buffer.len();
-            if length == 0 {
-                break;
-            }
-            buffer.hash_with(hash);
-            self.consume(length);
-        }
-        Ok(())
-    }
-}
+});
