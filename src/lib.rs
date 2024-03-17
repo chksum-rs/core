@@ -31,6 +31,8 @@
 //!
 //! This crate is licensed under the MIT License.
 
+#![forbid(unsafe_code)]
+
 mod error;
 
 use std::fmt::{Display, LowerHex, UpperHex};
