@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Refactored code to use macros for trait implementations, improving maintainability and reducing duplication.
+- Updated year range in `LICENSE`.
 
 ## [0.0.0] - 2023-12-21
 
