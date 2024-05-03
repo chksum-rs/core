@@ -15,6 +15,14 @@
 //! cargo add chksum-core
 //! ```     
 //!
+//! # Features
+//!
+//! ## Asynchronous Runtime
+//!
+//! * `async-runtime-tokio`: Enables async interface for Tokio runtime.
+//!
+//! By default, neither of these features is enabled.
+//!
 //! # Example Crates
 //!
 //! For implementation-specific examples, refer to the source code of the following crates:
@@ -34,12 +42,16 @@
 #![forbid(unsafe_code)]
 
 mod error;
+#[cfg(feature = "async-runtime-tokio")]
+mod tokio;
 
 use std::fmt::{Display, LowerHex, UpperHex};
 use std::fs::{read_dir, DirEntry, File, ReadDir};
 use std::io::{self, BufRead, BufReader, IsTerminal, Stdin, StdinLock};
 use std::path::{Path, PathBuf};
 
+#[cfg(feature = "async-runtime-tokio")]
+use async_trait::async_trait;
 #[doc(no_inline)]
 pub use chksum_hash_core as hash;
 
@@ -68,6 +80,15 @@ where
     T: Hash,
 {
     data.chksum::<T>()
+}
+
+/// Computes the hash of the given input.
+#[cfg(feature = "async-runtime-tokio")]
+pub async fn async_chksum<T>(mut data: impl AsyncChksumable) -> Result<T::Digest>
+where
+    T: Hash + Send,
+{
+    data.chksum::<T>().await
 }
 
 /// A trait for hash digests.
@@ -235,7 +256,7 @@ impl_chksumable!(PathBuf, &PathBuf, &mut PathBuf => {
     where
         H: Hash,
     {
-        self.as_path().chksum_with(hash)
+        Chksumable::chksum_with(&mut self.as_path(), hash)
     }
 });
 
@@ -267,7 +288,7 @@ impl_chksumable!(DirEntry, &DirEntry, &mut DirEntry => {
     where
         H: Hash,
     {
-        self.path().chksum_with(hash)
+        Chksumable::chksum_with(&mut self.path(), hash)
     }
 });
 
@@ -316,3 +337,38 @@ impl_chksumable!(StdinLock<'_>, &mut StdinLock<'_> => {
         Ok(())
     }
 });
+
+/// A trait for complex objects which must be processed chunk by chunk.
+#[cfg(feature = "async-runtime-tokio")]
+#[async_trait]
+pub trait AsyncChksumable: Send {
+    /// Calculates the checksum of the object.
+    async fn chksum<H>(&mut self) -> Result<H::Digest>
+    where
+        H: Hash + Send,
+    {
+        let mut hash = H::default();
+        self.chksum_with(&mut hash).await?;
+        Ok(hash.digest())
+    }
+
+    /// Updates the given hash instance with the data from the object.
+    async fn chksum_with<H>(&mut self, hash: &mut H) -> Result<()>
+    where
+        H: Hash + Send;
+}
+
+#[cfg(feature = "async-runtime-tokio")]
+#[async_trait]
+impl<T> AsyncChksumable for T
+where
+    T: Hashable + Send,
+{
+    async fn chksum_with<H>(&mut self, hash: &mut H) -> Result<()>
+    where
+        H: Hash + Send,
+    {
+        self.hash_with(hash);
+        Ok(())
+    }
+}
