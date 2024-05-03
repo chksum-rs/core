@@ -16,5 +16,13 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
+async-trait = { version = "0.1.80", optional = true }
 chksum-hash-core = "0.0.0"
 thiserror = "1.0.51"
+tokio = { version = "1.37.0", features = ["fs", "io-util", "io-std"], optional = true }
+
+[features]
+default = []
+
+# async runtimes
+async-runtime-tokio = ["async-trait", "tokio"]

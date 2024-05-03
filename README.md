@@ -25,6 +25,14 @@ Alternatively, you can use the [`cargo add`](https://doc.rust-lang.org/cargo/com
 cargo add chksum-core
 ```
 
+## Features
+
+### Asynchronous Runtime
+
+* `async-runtime-tokio`: Enables async interface for Tokio runtime.
+
+By default, neither of these features is enabled.
+
 ## Example Crates
 
 For implementation-specific examples, refer to the source code of the following crates:
