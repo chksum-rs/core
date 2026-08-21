@@ -13,7 +13,7 @@
 //!
 //! ```sh
 //! cargo add chksum-core
-//! ```     
+//! ```
 //!
 //! # Features
 //!
@@ -21,7 +21,7 @@
 //!
 //! * `async-runtime-tokio`: Enables async interface for Tokio runtime.
 //!
-//! By default, neither of these features is enabled.
+//! By default, none of these features is enabled.
 //!
 //! # Example Crates
 //!
@@ -42,21 +42,45 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![forbid(unsafe_code)]
 
+mod chksumable;
+mod context;
+mod diagnostic;
 mod error;
-#[cfg(feature = "async-runtime-tokio")]
-mod tokio;
+mod hashable;
+mod policy;
+mod traversal;
+mod visited;
 
-use std::fmt::{Display, LowerHex, UpperHex};
-use std::fs::{DirEntry, File, ReadDir, read_dir};
-use std::io::{self, BufRead, BufReader, IsTerminal, Stdin, StdinLock};
-use std::path::{Path, PathBuf};
+use std::num::NonZeroUsize;
 
-#[cfg(feature = "async-runtime-tokio")]
-use async_trait::async_trait;
 #[doc(no_inline)]
 pub use chksum_hash_core as hash;
 
+#[cfg(feature = "async-runtime-tokio")]
+pub use crate::chksumable::AsyncChksumable;
+pub use crate::chksumable::Chksumable;
+#[cfg(feature = "async-runtime-tokio")]
+pub use crate::context::{AsyncChksumer, AsyncChksumerBuilder};
+pub use crate::context::{Chksumer, ChksumerBuilder};
+pub use crate::diagnostic::Diagnostic;
 pub use crate::error::{Error, Result};
+pub use crate::hashable::{Digest, Hash, Hashable};
+pub use crate::policy::{DEFAULT_MAX_DIRECTORY_DEPTH, DEFAULT_MAX_DIRECTORY_ENTRIES, IrregularFile, NameMode};
+
+#[cfg(target_os = "espidf")]
+const DEFAULT_BUFFER_CAPACITY_BYTES: usize = 512;
+#[cfg(not(target_os = "espidf"))]
+const DEFAULT_BUFFER_CAPACITY_BYTES: usize = 64 * 1024;
+
+/// Default I/O buffer capacity (64 KiB on most platforms, 512 B on espidf).
+///
+/// Read overhead flattens out around 64 KiB, the same capacity hashing tools like `b3sum` default to; larger buffers
+/// buy little and cost memory per context. See also [`DEFAULT_MAX_DIRECTORY_DEPTH`] and
+/// [`DEFAULT_MAX_DIRECTORY_ENTRIES`], the directory-traversal counterparts to this buffer default.
+pub const DEFAULT_BUFFER_CAPACITY: NonZeroUsize = match NonZeroUsize::new(DEFAULT_BUFFER_CAPACITY_BYTES) {
+    Some(n) => n,
+    None => panic!("DEFAULT_BUFFER_CAPACITY must be non-zero"),
+};
 
 /// Creates a default hash.
 #[must_use]
@@ -64,312 +88,189 @@ pub fn default<H>() -> H
 where
     H: Hash,
 {
-    Default::default()
+    H::default()
 }
 
-/// Computes the hash of the given input.
-pub fn hash<T>(data: impl Hashable) -> T::Digest
+/// Computes the hash of in-memory bytes-like input.
+#[must_use]
+pub fn hash<H>(data: impl Hashable) -> H::Digest
 where
-    T: Hash,
+    H: Hash,
 {
-    data.hash::<T>()
+    data.hash::<H>()
 }
 
-/// Computes the hash of the given input.
-pub fn chksum<T>(mut data: impl Chksumable) -> Result<T::Digest>
+/// Returns a builder for a [`Chksumer`].
+#[must_use]
+pub fn builder<H>() -> ChksumerBuilder<H>
 where
-    T: Hash,
+    H: Hash,
 {
-    data.chksum::<T>()
+    Chksumer::<H>::builder()
 }
 
-/// Computes the hash of the given input.
+/// Computes the checksum of a [`Chksumable`] source such as a file, path, or directory.
+///
+/// This always uses a default-configured [`Chksumer`]; for non-default policies (e.g. [`NameMode`],
+/// [`IrregularFile`], directory limits, or diagnostic hooks), use [`chksum_with`] instead.
+///
+/// A `&str`/[`String`] path argument compiles but hashes the *string's own bytes*, not a file at that path — that
+/// call goes through [`Hashable`] instead of the filesystem [`Chksumable`] impls; pass a
+/// [`Path`](std::path::Path)/[`PathBuf`](std::path::PathBuf) to hash the filesystem target. See `docs/GOTCHAS.md` in
+/// the crate repository for this and other surprising-but-compiling call shapes.
+///
+/// # Errors
+///
+/// Returns an [`Error`] if the source cannot be read; see [`Chksumable::chksum_into`] for the specific variants.
+pub fn chksum<H>(mut data: impl Chksumable) -> Result<H::Digest>
+where
+    H: Hash,
+{
+    data.chksum::<H>()
+}
+
+/// Computes the checksum of a [`Chksumable`] source using a [`Chksumer`] configured via `configure`.
+///
+/// This is the way to run a one-shot checksum with non-default policies (e.g. [`NameMode`], [`IrregularFile`],
+/// directory limits, buffer capacity, or diagnostic hooks), in contrast to [`chksum`], which always uses a
+/// default-configured context.
+///
+/// # Errors
+///
+/// Returns an [`Error`] if the source cannot be read; see [`Chksumer::update_from`] for the specific variants.
+pub fn chksum_with<H>(
+    data: impl Chksumable,
+    configure: impl FnOnce(ChksumerBuilder<H>) -> ChksumerBuilder<H>,
+) -> Result<H::Digest>
+where
+    H: Hash,
+{
+    let mut ctx = configure(Chksumer::builder()).build();
+    ctx.update_from(data)?;
+    Ok(ctx.digest())
+}
+
+/// Returns a builder for an [`AsyncChksumer`].
 #[cfg(feature = "async-runtime-tokio")]
-pub async fn async_chksum<T>(mut data: impl AsyncChksumable) -> Result<T::Digest>
+#[must_use]
+pub fn async_builder<H>() -> AsyncChksumerBuilder<H>
 where
-    T: Hash + Send,
+    H: Hash,
 {
-    data.chksum::<T>().await
+    AsyncChksumer::<H>::builder()
 }
 
-/// A trait for hash digests.
-pub trait Digest: Display {
-    /// Returns a byte slice of the digest's contents.
-    #[must_use]
-    fn as_bytes(&self) -> &[u8]
-    where
-        Self: AsRef<[u8]>,
-    {
-        self.as_ref()
-    }
-
-    /// Returns a string in the lowercase hexadecimal representation.
-    #[must_use]
-    fn to_hex_lowercase(&self) -> String
-    where
-        Self: LowerHex,
-    {
-        format!("{self:x}")
-    }
-
-    /// Returns a string in the uppercase hexadecimal representation.
-    #[must_use]
-    fn to_hex_uppercase(&self) -> String
-    where
-        Self: UpperHex,
-    {
-        format!("{self:X}")
-    }
-}
-
-/// A trait for hash objects.
-pub trait Hash: Default {
-    /// The type representing the digest produced by finalizing the hash.
-    type Digest: Digest;
-
-    /// Calculates the hash digest of an input data.
-    #[must_use]
-    fn hash<T>(data: T) -> Self::Digest
-    where
-        T: AsRef<[u8]>,
-    {
-        let mut hash = Self::default();
-        hash.update(data);
-        hash.digest()
-    }
-
-    /// Updates the hash state with an input data.
-    fn update<T>(&mut self, data: T)
-    where
-        T: AsRef<[u8]>;
-
-    /// Resets the hash state to its initial state.
-    fn reset(&mut self);
-
-    /// Produces the hash digest.
-    #[must_use]
-    fn digest(&self) -> Self::Digest;
-}
-
-/// A trait for simple bytes-like objects.
-pub trait Hashable: AsRef<[u8]> {
-    /// Computes the hash digest.
-    fn hash<H>(&self) -> H::Digest
-    where
-        H: Hash,
-    {
-        let mut hash = H::default();
-        self.hash_with(&mut hash);
-        hash.digest()
-    }
-
-    /// Updates the given hash instance with the bytes from this object.
-    fn hash_with<H>(&self, hash: &mut H)
-    where
-        H: Hash,
-    {
-        hash.update(self);
-    }
-}
-
-macro_rules! impl_hashable {
-    ([$t:ty; LENGTH], $($rest:tt)+) => {
-        impl_hashable!([$t; LENGTH]);
-        impl_hashable!($($rest)*);
-    };
-
-    ($t:ty, $($rest:tt)+) => {
-        impl_hashable!($t);
-        impl_hashable!($($rest)*);
-    };
-
-    ([$t:ty; LENGTH]) => {
-        impl<const LENGTH: usize> Hashable for [$t; LENGTH] {}
-    };
-
-    ($t:ty) => {
-        impl Hashable for $t {}
-    };
-}
-
-impl_hashable!(&[u8], [u8; LENGTH], Vec<u8>, &str, String);
-
-impl<T> Hashable for &T where T: Hashable {}
-
-impl<T> Hashable for &mut T where T: Hashable {}
-
-/// A trait for complex objects which must be processed chunk by chunk.
-pub trait Chksumable {
-    /// Calculates the checksum of the object.
-    fn chksum<H>(&mut self) -> Result<H::Digest>
-    where
-        H: Hash,
-    {
-        let mut hash = H::default();
-        self.chksum_with(&mut hash)?;
-        Ok(hash.digest())
-    }
-
-    /// Updates the given hash instance with the data from the object.
-    fn chksum_with<H>(&mut self, hash: &mut H) -> Result<()>
-    where
-        H: Hash;
-}
-
-impl<T> Chksumable for T
-where
-    T: Hashable,
-{
-    fn chksum_with<H>(&mut self, hash: &mut H) -> Result<()>
-    where
-        H: Hash,
-    {
-        self.hash_with(hash);
-        Ok(())
-    }
-}
-
-macro_rules! impl_chksumable {
-    ($($t:ty),+ => $i:tt) => {
-        $(
-            impl Chksumable for $t $i
-        )*
-    };
-}
-
-impl_chksumable!(Path, &Path, &mut Path => {
-    fn chksum_with<H>(&mut self, hash: &mut H) -> Result<()>
-    where
-        H: Hash,
-    {
-        let metadata = self.metadata()?;
-        if metadata.is_dir() {
-            read_dir(self)?.chksum_with(hash)
-        } else {
-            // everything treat as a file when it is not a directory
-            File::open(self)?.chksum_with(hash)
-        }
-    }
-});
-
-impl_chksumable!(PathBuf, &PathBuf, &mut PathBuf => {
-    fn chksum_with<H>(&mut self, hash: &mut H) -> Result<()>
-    where
-        H: Hash,
-    {
-        Chksumable::chksum_with(&mut self.as_path(), hash)
-    }
-});
-
-impl_chksumable!(File, &File, &mut File => {
-    fn chksum_with<H>(&mut self, hash: &mut H) -> Result<()>
-    where
-        H: Hash,
-    {
-        if self.is_terminal() {
-            return Err(Error::IsTerminal);
-        }
-
-        let mut reader = BufReader::new(self);
-        loop {
-            let buffer = reader.fill_buf()?;
-            let length = buffer.len();
-            if length == 0 {
-                break;
-            }
-            buffer.hash_with(hash);
-            reader.consume(length);
-        }
-        Ok(())
-    }
-});
-
-impl_chksumable!(DirEntry, &DirEntry, &mut DirEntry => {
-    fn chksum_with<H>(&mut self, hash: &mut H) -> Result<()>
-    where
-        H: Hash,
-    {
-        Chksumable::chksum_with(&mut self.path(), hash)
-    }
-});
-
-impl_chksumable!(ReadDir, &mut ReadDir => {
-    fn chksum_with<H>(&mut self, hash: &mut H) -> Result<()>
-    where
-        H: Hash,
-    {
-        let dir_entries: io::Result<Vec<DirEntry>> = self.collect();
-        let mut dir_entries = dir_entries?;
-        dir_entries.sort_by_key(DirEntry::path);
-        dir_entries
-            .into_iter()
-            .try_for_each(|mut dir_entry| dir_entry.chksum_with(hash))?;
-        Ok(())
-    }
-});
-
-impl_chksumable!(Stdin, &Stdin, &mut Stdin => {
-    fn chksum_with<H>(&mut self, hash: &mut H) -> Result<()>
-    where
-        H: Hash,
-    {
-        self.lock().chksum_with(hash)
-    }
-});
-
-impl_chksumable!(StdinLock<'_>, &mut StdinLock<'_> => {
-    fn chksum_with<H>(&mut self, hash: &mut H) -> Result<()>
-    where
-        H: Hash,
-    {
-        if self.is_terminal() {
-            return Err(Error::IsTerminal);
-        }
-
-        loop {
-            let buffer = self.fill_buf()?;
-            let length = buffer.len();
-            if length == 0 {
-                break;
-            }
-            buffer.hash_with(hash);
-            self.consume(length);
-        }
-        Ok(())
-    }
-});
-
-/// A trait for complex objects which must be processed chunk by chunk.
+/// Asynchronously computes the checksum of an [`AsyncChksumable`] source.
+///
+/// This always uses a default-configured [`AsyncChksumer`]; for non-default policies (e.g. [`NameMode`],
+/// [`IrregularFile`], directory limits, or diagnostic hooks), use [`async_chksum_with`] instead.
+///
+/// # Errors
+///
+/// Returns an [`Error`] if the source cannot be read; see [`AsyncChksumable::chksum_into`] for the specific variants.
 #[cfg(feature = "async-runtime-tokio")]
-#[async_trait]
-pub trait AsyncChksumable: Send {
-    /// Calculates the checksum of the object.
-    async fn chksum<H>(&mut self) -> Result<H::Digest>
-    where
-        H: Hash + Send,
-    {
-        let mut hash = H::default();
-        self.chksum_with(&mut hash).await?;
-        Ok(hash.digest())
-    }
-
-    /// Updates the given hash instance with the data from the object.
-    async fn chksum_with<H>(&mut self, hash: &mut H) -> Result<()>
-    where
-        H: Hash + Send;
+pub async fn async_chksum<H>(mut data: impl AsyncChksumable) -> Result<H::Digest>
+where
+    H: Hash + Send,
+{
+    let mut ctx = AsyncChksumer::<H>::new();
+    data.chksum_into(&mut ctx).await?;
+    Ok(ctx.digest())
 }
 
+/// Asynchronously computes the checksum of an [`AsyncChksumable`] source using an [`AsyncChksumer`] configured via
+/// `configure`.
+///
+/// This is the way to run a one-shot asynchronous checksum with non-default policies (e.g. [`NameMode`],
+/// [`IrregularFile`], directory limits, buffer capacity, or diagnostic hooks), in contrast to [`async_chksum`], which
+/// always uses a default-configured context.
+///
+/// # Errors
+///
+/// Returns an [`Error`] if the source cannot be read; see [`AsyncChksumer::update_from`] for the specific variants.
 #[cfg(feature = "async-runtime-tokio")]
-#[async_trait]
-impl<T> AsyncChksumable for T
+pub async fn async_chksum_with<H>(
+    data: impl AsyncChksumable,
+    configure: impl FnOnce(AsyncChksumerBuilder<H>) -> AsyncChksumerBuilder<H>,
+) -> Result<H::Digest>
 where
-    T: Hashable + Send,
+    H: Hash + Send,
 {
-    async fn chksum_with<H>(&mut self, hash: &mut H) -> Result<()>
-    where
-        H: Hash + Send,
-    {
-        self.hash_with(hash);
-        Ok(())
+    let mut ctx = configure(AsyncChksumer::builder()).build();
+    ctx.update_from(data).await?;
+    Ok(ctx.digest())
+}
+
+#[cfg(test)]
+mod test_util {
+    use std::fmt;
+
+    use crate::hashable::{Digest, Hash, Hashable};
+
+    /// Test hash that collects all bytes for equality checking.
+    #[derive(Debug, Default, Clone, PartialEq)]
+    pub(crate) struct Collect(pub(crate) Vec<u8>);
+
+    impl Hashable for Collect {}
+
+    impl Hash for Collect {
+        type Digest = CollectDigest;
+
+        fn update<T>(&mut self, data: T)
+        where
+            T: AsRef<[u8]>,
+        {
+            let Self(vec) = self;
+            vec.extend_from_slice(data.as_ref());
+        }
+
+        fn reset(&mut self) {
+            let Self(vec) = self;
+            vec.clear();
+        }
+
+        fn digest(&self) -> Self::Digest {
+            let Self(vec) = self;
+            CollectDigest(vec.clone())
+        }
+    }
+
+    impl AsRef<[u8]> for Collect {
+        fn as_ref(&self) -> &[u8] {
+            &self.0
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    pub(crate) struct CollectDigest(pub(crate) Vec<u8>);
+
+    impl fmt::Display for CollectDigest {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            let Self(vec) = self;
+            write!(f, "{vec:?}")
+        }
+    }
+
+    impl Digest for CollectDigest {}
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::builder;
+    use crate::test_util::Collect;
+
+    #[test]
+    fn builder_produces_working_chksumer() {
+        let mut ctx = builder::<Collect>().build();
+        ctx.update(b"hello".as_slice());
+        assert_eq!(ctx.digest().0, b"hello".to_vec());
+    }
+
+    #[cfg(feature = "async-runtime-tokio")]
+    #[tokio::test]
+    async fn async_builder_produces_working_async_chksumer() {
+        let mut ctx = crate::async_builder::<Collect>().build();
+        ctx.update(b"hello".as_slice());
+        assert_eq!(ctx.digest().0, b"hello".to_vec());
     }
 }
