@@ -203,9 +203,62 @@ where
 
 #[cfg(test)]
 mod test_util {
-    use std::fmt;
+    use std::ops::Deref;
+    use std::path::{Path, PathBuf};
+    use std::{fmt, fs};
 
     use crate::hashable::{Digest, Hash, Hashable};
+
+    /// Writes `contents` to `path`, creating parent directories as needed. Shared by the `blocking`/`tokio` test
+    /// modules so both dispatch paths' directory-traversal tests build fixtures the same way.
+    pub(crate) fn write_file(path: &Path, contents: &[u8]) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create parent dirs");
+        }
+        fs::write(path, contents).expect("write test file");
+    }
+
+    /// RAII scratch directory under `env::temp_dir()`, unique per test name and process (via `std::process::id()`),
+    /// so concurrent test processes cannot collide over the same path. Removed recursively on drop, including when a
+    /// test panics, so fixtures no longer leak or need a manual pre/post `remove_dir_all`.
+    pub(crate) struct TempTree(PathBuf);
+
+    impl TempTree {
+        pub(crate) fn new(name: &str) -> Self {
+            let path = std::env::temp_dir().join(format!("chksum_test_{name}_{}", std::process::id()));
+            // A prior test run killed (e.g. SIGKILL) before its `Drop` ran can leave a stale directory behind; a
+            // reused pid would then let its leftovers leak into this run's fixtures and assertions.
+            let _ = fs::remove_dir_all(&path);
+            Self(path)
+        }
+
+        /// Borrows the scratch directory as a `Path`. An inherent method (rather than relying on `Deref` resolution)
+        /// works around a nightly toolchain quirk where `.as_path()` reached through `Deref` spuriously requires the
+        /// unstable `str_as_str` feature.
+        pub(crate) fn as_path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Deref for TempTree {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl AsRef<Path> for TempTree {
+        fn as_ref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempTree {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
 
     /// Test hash that collects all bytes for equality checking.
     #[derive(Debug, Default, Clone, PartialEq)]
@@ -256,8 +309,9 @@ mod test_util {
 
 #[cfg(test)]
 mod tests {
-    use crate::builder;
-    use crate::test_util::Collect;
+    use crate::policy::NameMode;
+    use crate::test_util::{Collect, TempTree, write_file};
+    use crate::{Chksumer, builder, chksum_with};
 
     #[test]
     fn builder_produces_working_chksumer() {
@@ -266,11 +320,51 @@ mod tests {
         assert_eq!(ctx.digest().0, b"hello".to_vec());
     }
 
+    #[test]
+    fn chksum_with_matches_hand_built_chksumer() {
+        let base = TempTree::new("chksum_with_name_mode");
+        write_file(&base.join("a"), b"foo");
+        write_file(&base.join("b"), b"bar");
+
+        let via_helper = chksum_with::<Collect>(base.as_path(), |builder| builder.name_mode(NameMode::FileName))
+            .expect("chksum_with should succeed");
+
+        let mut ctx = Chksumer::<Collect>::builder().name_mode(NameMode::FileName).build();
+        ctx.update_from(base.as_path())
+            .expect("hand-built chksumer should succeed");
+        let expected = ctx.digest();
+
+        assert_eq!(via_helper, expected);
+    }
+
     #[cfg(feature = "async-runtime-tokio")]
     #[tokio::test]
     async fn async_builder_produces_working_async_chksumer() {
         let mut ctx = crate::async_builder::<Collect>().build();
         ctx.update(b"hello".as_slice());
         assert_eq!(ctx.digest().0, b"hello".to_vec());
+    }
+
+    #[cfg(feature = "async-runtime-tokio")]
+    #[tokio::test]
+    async fn async_chksum_with_matches_hand_built_async_chksumer() {
+        let base = TempTree::new("async_chksum_with_name_mode");
+        write_file(&base.join("a"), b"foo");
+        write_file(&base.join("b"), b"bar");
+
+        let via_helper =
+            crate::async_chksum_with::<Collect>(base.as_path(), |builder| builder.name_mode(NameMode::FileName))
+                .await
+                .expect("async_chksum_with should succeed");
+
+        let mut ctx = crate::AsyncChksumer::<Collect>::builder()
+            .name_mode(NameMode::FileName)
+            .build();
+        ctx.update_from(base.as_path())
+            .await
+            .expect("hand-built async chksumer should succeed");
+        let expected = ctx.digest();
+
+        assert_eq!(via_helper, expected);
     }
 }

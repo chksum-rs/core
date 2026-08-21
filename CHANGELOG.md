@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `max_directory_depth`, `max_directory_entries`, `follow_symlink_revisits`, and `dir_entries_capacity_hint` builder options on `Chksumer`/`AsyncChksumer` (defaults 64, 10,000,000, dedup-on, and 32 respectively); `max_directory_depth`/`max_directory_entries` take a `NonZeroUsize`, consistent with `capacity`.
 - Added the `TraversalTooDeep` and `DirectoryTooLarge` error variants.
 - Added the `Diagnostic::SkippedRevisitedDirectory` variant.
+- Added the `nonblocking-open` Cargo feature (Unix `O_NONBLOCK` opens for directory entries and for a regular file/symlink-to-file passed directly as the top-level source; off by default).
 - Added `AsyncChksumer::update`, an infallible synchronous method mirroring `Chksumer::update` for feeding in-memory bytes-like data without an `.await`.
 - Exported `DEFAULT_MAX_DIRECTORY_DEPTH` and `DEFAULT_MAX_DIRECTORY_ENTRIES` as public consts, so the documented `max_directory_depth`/`max_directory_entries` defaults are programmatically readable.
 - Added `DEFAULT_BUFFER_CAPACITY` as a public const documenting the default I/O buffer capacity (64 KiB on most platforms, 512 B on `espidf`).
@@ -25,8 +26,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Added a terminal guard to the async `File` and `Stdin` sources so they return `IsTerminal` instead of blocking on a TTY, matching the synchronous path (works around [tokio-rs/tokio#6407](https://github.com/tokio-rs/tokio/issues/6407) via `AsFd`/`AsHandle`).
 - Reads interrupted by a signal (`ErrorKind::Interrupted`) are now retried instead of aborting the computation.
+- Fixed `IrregularFile::Skip` not covering a symlink whose target cannot be resolved (e.g. a dangling symlink), which previously still aborted traversal with a raw `Io` error instead of being skipped.
+- Symlink cycles no longer cause unbounded traversal, and repeated-directory-target fan-out is now bounded (not eliminated): directories reached through a symlink are deduplicated by filesystem identity (opt out with `follow_symlink_revisits(true)`). A symlink pointing back at an ancestor (including the root), or a directory reachable both by its own plain path and through one or more symlinks, is bounded and terminates, at the documented cost of at most one extra traversal pass of that subtree per level of directory nesting before the revisit is caught.
+- Traversal no longer risks stack overflow on deeply nested trees nor unbounded memory on a single huge directory (configurable `max_directory_depth` / `max_directory_entries` limits). The default `max_directory_depth` (64) is chosen to stay safely below a native stack overflow on a 2 MiB thread stack -- the default `std::thread::spawn`/`tokio::task::spawn_blocking` worker stack size -- on both the synchronous path (which recurses directly) and the asynchronous path (which recurses through a chain of nested `poll` calls on heap-boxed futures: cheaper per level, but not free of native-stack use). Raising the limit is a caller-opted-in risk unless the calling thread's stack is sized accordingly, on both paths.
+- With the `nonblocking-open` feature enabled on Unix, a directory entry, or a regular file (or symlink-to-file) passed directly as the top-level source, racing into a FIFO or slow device between classification and open no longer hangs the traversal (without the feature the risk remains, as documented).
+- A symlink resolving to an irregular target is now reported as `SkippedIrregular` rather than `SkippedUnresolvableSymlink`, and a genuine I/O error while resolving a symlink target is surfaced instead of masked.
+- An irregular path passed directly at the top level now honors the `IrregularFile` policy instead of always erroring, including when that path is itself a symlink to an irregular or dangling target.
+- A top-level `DirEntry` now hashes identically to the same object passed as a top-level `Path`: it no longer frames itself with its own name under `NameMode::FileName`, and no longer registers a symlinked-directory target into the visited set, matching `Path`'s top-level behavior in both cases.
 - Restored dispatch through `Hashable::hash_into` in the blanket `Chksumable`/`AsyncChksumable` impls, so a type overriding `hash_into` is honored by `chksum`/`async_chksum` instead of being bypassed.
+- Aligned the async directory-entry-count check to the same precedence as the synchronous path: the configured `max_directory_entries` cap is checked before propagating a raw I/O error from reading one entry past it, so identical trees produce `DirectoryTooLarge` on both paths.
 - `Chksumer`/`AsyncChksumer::update_from` now resets the recursion depth alongside the visited-directory set on every fresh top-level call, so a `Chksumer`/`AsyncChksumer` reused after an earlier call returned early (error, or a cancelled `AsyncChksumer::update_from` future) always starts with a full depth budget instead of a stranded one.
 
 ### Changed
@@ -35,6 +45,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Renamed `Hashable::hash_with` to `hash_into`.
 - Renamed `Chksumable::chksum_with` to `chksum_into`; it now takes `&mut Chksumer<H>`.
 - Renamed `AsyncChksumable::chksum_with` to `chksum_into`; it now takes `&mut AsyncChksumer<H>`.
+- Changed `Path` to return `NotARegularFile` for paths that are neither files nor directories.
+- Changed directory traversal to abort with `NotARegularFile` on non-regular entries such as sockets and named pipes by default, instead of attempting to open them as files; opt into skipping them via `IrregularFile::Skip`.
+- Changed directory traversal to open verified entries directly, skipping a redundant `stat` and a per-file terminal check.
 - Increased the default I/O buffer capacity from 8 KiB to 64 KiB; override it via the builder's `capacity`.
 - Deferred `Chksumer`/`AsyncChksumer`'s read buffer allocation to first `update_from_reader` use instead of upfront on construction, so hashing purely in-memory data (`chksum`/`update`) no longer pays for a buffer it never reads into; `capacity()` is unaffected and still reports the configured capacity either way.
 - Upgraded `thiserror` to 2.0.
