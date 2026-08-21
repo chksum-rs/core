@@ -40,10 +40,10 @@ For implementation-specific examples, refer to the source code of the following 
 * [`chksum-md5`](https://github.com/chksum-rs/md5)
 * [`chksum-sha1`](https://github.com/chksum-rs/sha1)
 * [`chksum-sha2`](https://github.com/chksum-rs/sha2)
-    * [`chksum-sha2-224`](http://github.com/chksum-rs/sha2-224)
-    * [`chksum-sha2-256`](http://github.com/chksum-rs/sha2-256)
-    * [`chksum-sha2-384`](http://github.com/chksum-rs/sha2-384)
-    * [`chksum-sha2-512`](http://github.com/chksum-rs/sha2-512)
+    * [`chksum-sha2-224`](https://github.com/chksum-rs/sha2-224)
+    * [`chksum-sha2-256`](https://github.com/chksum-rs/sha2-256)
+    * [`chksum-sha2-384`](https://github.com/chksum-rs/sha2-384)
+    * [`chksum-sha2-512`](https://github.com/chksum-rs/sha2-512)
 
 ## License
 

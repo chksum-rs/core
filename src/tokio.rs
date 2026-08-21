@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use tokio::fs::{metadata, read_dir, DirEntry, File, ReadDir};
+use tokio::fs::{DirEntry, File, ReadDir, metadata, read_dir};
 use tokio::io::{AsyncBufReadExt as _, BufReader, Stdin};
 
 use crate::{AsyncChksumable, Hash, Hashable, Result};

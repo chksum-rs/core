@@ -39,7 +39,7 @@
 //!
 //! This crate is licensed under the MIT License.
 
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![forbid(unsafe_code)]
 
 mod error;
@@ -47,7 +47,7 @@ mod error;
 mod tokio;
 
 use std::fmt::{Display, LowerHex, UpperHex};
-use std::fs::{read_dir, DirEntry, File, ReadDir};
+use std::fs::{DirEntry, File, ReadDir, read_dir};
 use std::io::{self, BufRead, BufReader, IsTerminal, Stdin, StdinLock};
 use std::path::{Path, PathBuf};
 

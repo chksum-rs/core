@@ -2,8 +2,8 @@
 name = "chksum-core"
 version = "0.1.0"
 authors = ["Konrad Goławski <konrad@golawski.it>"]
-edition = "2021"
-rust-version = "1.70.0"
+edition = "2024"
+rust-version = "1.95.0"
 description = "Core traits and functions for straightforward hash computation of bytes, files, directories and more."
 readme = ".cargo/README.md"
 repository = "https://github.com/chksum-rs/core"
@@ -16,10 +16,13 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
-async-trait = { version = "0.1.80", optional = true }
-chksum-hash-core = "0.0.0"
-thiserror = "1.0.51"
-tokio = { version = "1.37.0", features = ["fs", "io-util", "io-std"], optional = true }
+async-trait = { version = "0.1", optional = true }
+chksum-hash-core = "0.0"
+thiserror = "2.0"
+tokio = { version = "1.42", features = ["fs", "io-util", "io-std"], optional = true }
+
+[dev-dependencies]
+tokio = { version = "1.42", features = ["rt", "macros"] }
 
 [features]
 default = []

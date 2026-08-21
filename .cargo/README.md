@@ -40,10 +40,10 @@ For implementation-specific examples, refer to the source code of the following 
 * [`chksum-md5`](https://crates.io/crates/chksum-md5)
 * [`chksum-sha1`](https://crates.io/crates/chksum-sha1)
 * [`chksum-sha2`](https://crates.io/crates/chksum-sha2)
-    * [`chksum-sha2-224`](http://crates.io/crates/chksum-sha2-224)
-    * [`chksum-sha2-256`](http://crates.io/crates/chksum-sha2-256)
-    * [`chksum-sha2-384`](http://crates.io/crates/chksum-sha2-384)
-    * [`chksum-sha2-512`](http://crates.io/crates/chksum-sha2-512)
+    * [`chksum-sha2-224`](https://crates.io/crates/chksum-sha2-224)
+    * [`chksum-sha2-256`](https://crates.io/crates/chksum-sha2-256)
+    * [`chksum-sha2-384`](https://crates.io/crates/chksum-sha2-384)
+    * [`chksum-sha2-512`](https://crates.io/crates/chksum-sha2-512)
 
 ## License
 
