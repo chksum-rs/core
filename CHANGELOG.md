@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `DEFAULT_BUFFER_CAPACITY` as a public const documenting the default I/O buffer capacity (64 KiB on most platforms, 512 B on `espidf`).
 - Added an `io::Write` impl for `Chksumer` so data can be streamed in via `io::copy` or `write!`, feeding the hash directly; `flush` is a no-op and writes never fail.
 - Added crate-root `builder`/`async_builder` and `chksum_with`/`async_chksum_with` helpers: the former delegate to `Chksumer::builder`/`AsyncChksumer::builder`, and the latter run a one-shot checksum through a caller-configured builder, for callers who need non-default policies without hand-building a context.
+- Added `docs/GOTCHAS.md`, a page of call shapes that compile and run but silently do the wrong thing (e.g. a string path hashing itself instead of the file it names, or context reuse without `reset()`), and a quick-start `# Usage` section to the crate-level rustdoc mirroring the README's two directory-digest modes.
 
 ### Fixed
 
