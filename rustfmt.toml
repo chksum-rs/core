@@ -1,5 +1,5 @@
 combine_control_expr = false
-edition = "2021"
+edition = "2024"
 force_multiline_blocks = true
 format_code_in_doc_comments = true
 format_generated_files = true
